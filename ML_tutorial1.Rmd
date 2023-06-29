@@ -1,0 +1,353 @@
+---
+title: "ML_tutorial1"
+author: "Jonas Metz"
+date: '2023-06-30'
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# install required packages
+library(rlist)
+library(ggplot2)
+```
+
+## 0. About this tutorial
+
+The goal of this tutorial is to convey the basic idea of artificial neural networks. You will be provided with code examples that show how simple versions of algorithms can be implemented using exclusively basic R functions. You will be instructed to play with the code to get an idea of the algorithms' mechanics, capabilities, limitations and pitfalls.
+
+If you want to learn more about machine learning, I can strongly recommend the free online course [Learning from data](https://home.work.caltech.edu/telecourse.html) taught by Yaser Abu-Mostafa.
+
+## 1. The Perceptron Algorithm
+
+The perceptron algorithm can be seen as an abstraction of the signal processing within a biological neuron. The algorithm takes a real valued vector as input. The weighted sum of all vector elements is mapped to one out of two possible output values by an activation function. Therefore, the algorithm can be used for binary classification of data that are linearly separable.
+
+The goal of this section is to understand how the algorithm works and how multiple perceptrons can be combined to classify data that are not linearly separable.
+
+### 1.1 Implementation of the perceptron algorithm
+
+```{r}
+apply_perceptron <- function(weights=NULL, input_data=NULL){
+  # to use the first weight as z-intercept, the z-value of the data (first column) is set to 1
+  input_data_ext <- cbind(rep(1, nrow(input_data)), input_data)
+  # do matrix-vector multiplication and get sign of each entry in the resulting vector
+  # this means that we apply the perceptron function to each row (data point)
+  labels <- sign((input_data_ext %*% weights))
+  return(labels)
+}
+```
+
+### 1.2 Understanding the effect of weights
+
+Think about the effect of the weights and test your understanding by changing the weight parameters in the section below. Identify the values that allow the perceptron to map coordinates from the blue region in the plot below to +1 and coordinates from the red region to -1.
+
+```{r echo=FALSE}
+ggplot() +
+  geom_abline(intercept = 1, slope = -1, color="green", linetype="dashed", size=0.5) +
+  geom_ribbon(stat = 'function', fun = function(x){-x+1},
+              mapping = aes(ymin = after_stat(y), ymax = 1),
+              fill = 'lightblue', alpha = 0.5)+
+  geom_ribbon(stat = 'function', fun = function(x){-x+1},
+              mapping = aes(ymin = 0, ymax = after_stat(y)),
+              fill = 'red', alpha = 0.5)+
+  theme(axis.text=element_text(size=8),
+        axis.title=element_text(size=0,face="bold"))+
+  coord_fixed()
+```
+
+```{r echo=FALSE}
+rand_select <- function(dimension_intervals=list(x1, x2), number_of_samples=10){
+  list_with_one_vector_per_dim <- lapply(dimension_intervals, FUN=function(interval){
+    runif(number_of_samples, min=interval[1], max=interval[2])
+  })
+  df_with_points <- do.call(cbind, list_with_one_vector_per_dim)
+  return(df_with_points)
+}
+```
+
+```{r}
+# select random points from two dimensional space
+set.seed(1)
+points <- rand_select(dimension_intervals=list(c(-1, 1), c(-1, 1)), number_of_samples=1000)
+# classify those points using the perceptron algorithm
+labels1 <- apply_perceptron(weights=c(0, 1, 1), input_data=points)
+
+# visualize the results
+data1 <- data.frame(x1=points[,1], x2=points[,2], label=as.character(labels1))
+ggplot(data1, aes(x=x1, y=x2, color=label)) +
+  geom_point(size=1)+xlim(-1, 1)+ylim(-1, 1)+coord_fixed()+
+  theme(axis.text=element_text(size=12),
+        axis.title=element_text(size=12,face="bold"),
+        legend.title = element_text(size=12),
+        legend.text = element_text(size=12),
+        legend.key.size = unit(1, "cm"),
+        legend.box.margin=margin(-10,-10,-10,-10))
+```
+
+### 1.3 Classifying data that are not linearly separable by combining multiple perceptrons.
+
+In the plot below points are colored once more by their class identity. However, these two classes are no longer separable by one perceptron. Instead, the outputs from two perceptrons can be combined by logical operations (AND, OR) to assign the points to their correct class. This operation can be implemented in a network of five perceptrons: In the first layer, we need two perceptrons that independently classify each input point by one of the two linear boundaries in the data set. In the second layer, we need again two perceptrons that both get their input from both perceptrons of the previous layer. Note that the perceptrons in the second layer can only receive (1,1), (-1,-1), (1,-1) or (-1,1) as input. One of the perceptrons from the second layer can test if input1 AND input2 equals +1 while the other can test if input1 AND input2 equals -1. The last perceptron in the third layer must return 1 if the first OR the second statement from the second layer was TRUE.
+
+```{r echo=FALSE}
+labels2 <- apply_perceptron(weights=c(0, 1, -1), input_data=points)
+data2 <- data1
+data2$label <- as.character(unlist(lapply(c(1:length(labels2)), FUN=function(index){if(labels1[index] == labels2[index]){return(1)}else{return(-1)}})))
+
+ggplot(data2, aes(x=x1, y=x2, color=label)) +
+  geom_point(size=1)+xlim(-1, 1)+ylim(-1, 1)+coord_fixed()+
+  theme(axis.text=element_text(size=12),
+        axis.title=element_text(size=12,face="bold"),
+        legend.title = element_text(size=12),
+        legend.text = element_text(size=12),
+        legend.key.size = unit(1, "cm"),
+        legend.box.margin=margin(-10,-10,-10,-10))
+```
+
+Let's implement the network of five perceptrons:
+
+```{r}
+apply_perceptron_network <- function(weights1=NULL, weights2=NULL, weights3=NULL, weights4=NULL, weights5=NULL, input_data=NULL){
+  input_data_ext <- cbind(rep(1, nrow(input_data)), input_data)
+  # run perceptrons of input layer
+  output1 <- sign((input_data_ext %*% weights1))
+  output2 <- sign((input_data_ext %*% weights2))
+  input_for_hidden_layer <- as.matrix(cbind(rep(1, nrow(input_data)), output1, output2))
+  # run perceptrons of hidden (intermediate) layer
+  output3 <- sign((input_for_hidden_layer %*% weights3))
+  output4 <- sign((input_for_hidden_layer %*% weights4))
+  input_for_final_perceptron <- as.matrix(cbind(rep(1, nrow(input_data)), output3, output4))
+  # run output perceptron
+  output5 <- sign((input_for_final_perceptron %*% weights5))
+  return(output5)
+}
+```
+
+Now, adjust the weights so that the network conducts the logical operation as described before. So you should get the same plot again.
+
+```{r}
+data2$model_prediction <- apply_perceptron_network(weights1=c(0,1,1), weights2=c(0,1,-1), weights3=c(-1.5, 1, 1), weights4=c(-1.5, -1, -1), weights5=c(1.5, 1, 1), input_data=as.matrix(data2[,c(1,2)]))
+data2$model_prediction <- as.character(data2$model_prediction)
+ggplot(data2, aes(x=x1, y=x2, color=model_prediction)) +
+  geom_point(size=1)+xlim(-1, 1)+ylim(-1, 1)+coord_fixed()+
+  theme(axis.text=element_text(size=12),
+        axis.title=element_text(size=12,face="bold"),
+        legend.title = element_text(size=12),
+        legend.text = element_text(size=12),
+        legend.key.size = unit(1, "cm"),
+        legend.box.margin=margin(-10,-10,-10,-10))
+
+```
+
+## 2. Artificial Neural Networks
+
+**Nomenclature comment:** When the term "neural network" is used, I refer to a particular architecture that is called "multi layer perceptron" (MLP). I prefer "neural network" because a MLP consists of nodes with a smooth activation function and not a step-function that is more specific for the perceptron.
+
+As shown in the last exercise of the previous section, multiple perceptrons can be combined to perform logical operations. However, we had to select all weights manually and this would not be feasible if we needed a larger network to separate data with more complex class boundaries. Therefore, we need to implement an optimization algorithm that finds the best values for all weights in the network. The best weight values are those that result in network outputs for the input data that are as close to the ground truth as possible. Below, you find a description of the basic components needed for optimizing the weights of a network:
+
+1.  A loss (error) function is used to score the difference between the current values assigned to the data by the network and the known target values that we want to have assigned to the data.
+
+2.  Optimization of weights is performed in an iterative procedure in which weights are repeatedly changed by small values. To do this in a directed manner, the favorable direction of change (the direction in which the value of the loss function decreases steepest) must be computed for all weights. This direction is provided by the negative gradient vector. Accordingly, this optimization method is called "gradient descent" and we will implement a very efficient version of it that takes advantage of the hierarchical structure in neural networks. The algorithm is called backpropagation-algorithm and it is explained in the section below. To ensure that we can use this algorithm, our network must fullfill one criteria: The gradient of the loss function must be differentiable with respect to all weights. To achieve this, the loss function and all activation functions (each neuron has its own activation function) must be differentiable.
+
+### 2.1 Implementation of a neural network
+
+Define the network architecture by setting up a list with weight matrices.
+
+```{r}
+set.seed(1)
+
+# specify the architecture: "+1" is always added to the number of inputs because we always add the same constant as an extra input so that one weight per neuron functions as the intercept (also called bias)
+N_dims_data <- 2
+N_inputs_to_L1 <- N_dims_data + 1
+N_neurons_in_L1 <- 2
+N_inputs_to_L2 <- N_neurons_in_L1 + 1
+N_neurons_in_L2 <- 2
+N_inputs_to_L3 <- N_neurons_in_L2 + 1
+N_neurons_in_L3 <- 1
+
+network_weights <- list(list(
+matrix(runif(n=N_neurons_in_L1*N_inputs_to_L1, min=-1, max=1), nrow = N_neurons_in_L1, ncol=N_inputs_to_L1), 
+matrix(runif(n=N_neurons_in_L2*N_inputs_to_L2, min=-1, max=1), nrow = N_neurons_in_L2, ncol=N_inputs_to_L2), 
+matrix(runif(n=N_neurons_in_L3*N_inputs_to_L3, min=-1, max=1), nrow = N_neurons_in_L3, ncol=N_inputs_to_L3)))
+```
+
+Define the network function (a sequence of functions that is applied to the input data) based on the provided architecture.
+
+```{r}
+forward_pass_function <- function(network_weights=NULL, data=NULL){
+  optimized_weights <- network_weights[[length(network_weights)]]
+  # to use weights in first column as biases, a constant is added to data vector at position       one
+  # this needs to be repeated for every layer
+  input_l1 <- rbind(rep(1, ncol(data)), data)
+  # initialize lists for storing inputs and outputs
+  inputs <- list(input_l1)
+  outputs <- list()
+  # run first layer and all hidden layers in loop
+  for (index in c(1:(length(optimized_weights)-1))){
+    outputs[[index]] <- tanh(optimized_weights[[index]] %*% inputs[[index]])
+    inputs[[index+1]] <- rbind(rep(1, ncol(outputs[[index]])), outputs[[index]])
+  }
+  # run output layer; as our goal is to classify data, we just take the sign of the output
+  outputs[[length(optimized_weights)]] <- tanh(optimized_weights[[length(optimized_weights)]] %*% inputs[[length(optimized_weights)]])
+  # return final results plus all intermediate in- and outputs
+  return(list(result=outputs[[length(optimized_weights)]],
+              inputs=inputs,
+              outputs=outputs))
+}
+```
+
+Below you find a possible implementation of the backpropagation-algorithm. As there are many good explanations on the internet, I will not explain it here.
+
+```{r}
+backpropagation_function <- function(in_out_values=results, weights=network_weights, labels=matrix(c(1))){
+  weights_last_iter <- weights[[length(weights)]]
+  # initialize list to be filled with deltas
+  delta_list <- rep(list(NA), length(weights_last_iter))
+  # compute deltas of output layer; this formula is derived from the squared error function
+  out_layer <- length(delta_list)
+  outs <- in_out_values$outputs[[out_layer]]
+  delta_list[[out_layer]] <- (1-outs^2)*2*(outs-labels)
+  # compute deltas of all other layers; only depend on upstream deltas and are independent of    error function
+  for (layer in c((out_layer-1):1)){
+    outs <- in_out_values$outputs[[layer]]
+    weights_prev <- weights_last_iter[[layer+1]]
+    deltas_prev <- delta_list[[layer+1]]
+    # In the formula below, the weights corresponding to the biases of the previous layer are      removed because they are not connected to a neuron of the current layer and hence
+    # not part of the partial derivatives of the error with respect to other weights
+    delta_list[[layer]] <- (1-outs^2)*(t(weights_prev)[c(2:ncol(weights_prev)),,drop=FALSE] %*% deltas_prev)
+  }
+  return(delta_list)
+}
+```
+
+Now we have all the components we need to implement the training function for our network:
+
+```{r}
+training_function <- function(training_data=matrix(c(NA, NA)), 
+                              training_data_labels=c(NA), 
+                              network_weights=NULL, 
+                              learning_rate=0.01,
+                              test_data=matrix(c(NA, NA)),
+                              test_data_labels=c(NA),
+                              accuracy_threshold=0.95){
+  accuracy_test <- 0
+  while (accuracy_test < accuracy_threshold){
+    # bring training data into random order (this is repeated if all training data have been       used once but the desired model performance has not been reached)
+    order <- sample(c(1:ncol(training_data)), size = ncol(training_data), replace = FALSE)
+    training_data <- training_data[, order]
+    training_data_labels <- training_data_labels[order]
+    # use one data point after another for training the model
+    data_index <- 1
+    while ((accuracy_test < accuracy_threshold) & (data_index <= ncol(training_data))){
+      # apply gradient descent to optimize network weights
+      # 1. forward pass: for one input data point compute all network values
+      results <- forward_pass_function(network_weights=network_weights, data=training_data[, data_index, drop=FALSE])
+      # 2. compute partial derivatives of loss (error) function for all weights using                backpropagation
+      deltas <- backpropagation_function(in_out_values=results, weights=network_weights, labels=matrix(training_data_labels[data_index]))
+      # 3. update weights in list
+      network_weights[[1]] <- lapply(c(1:length(network_weights[[1]])), FUN=function(layer){
+        new_weights <- network_weights[[1]][[layer]] - (learning_rate * (deltas[[layer]] %*% t(results$inputs[[layer]])))
+        return(new_weights)
+      })
+      # 4. test how well model performs on data that were not used for training
+      results_test <- sign(forward_pass_function(network_weights=network_weights, data=test_data)[[1]])
+      accuracy_test <- length(which(results_test == test_data_labels)) / ncol(test_data)
+      print(accuracy_test)
+      # update index
+      data_index <- data_index + 1
+    }
+  }
+  return(network_weights)
+}
+```
+
+### 2.2 Example for training and using the network
+
+Let's first **create some data** for training our neural network. We do this by randomly selecting coordinates from a region in a two-dimensional space. We assign class labels to these points using the perceptron network that we built before. We consider these labels as the ground truth annotation of the data and we want our network to learn how to compute the correct labels of the data based on their coordinates.
+
+```{r}
+# 1. draw random coordinates from a region in a two-dimensional space
+set.seed(1)
+x1 <- c(-1,1)
+x2 <- c(-1,1)
+coordinates_to_map <- rand_select(dimension_intervals=list(x1, x2), number_of_samples=10000)
+# 2. assign labels (+1 or -1) to these coordinates using the perceptron network
+labels_from_perceptron_network <- apply_perceptron_network(weights1=c(0,1,1), weights2=c(0,1,-1), weights3=c(-1.5, 1, 1), weights4=c(-1.5, -1, -1), weights5=c(1.5, 1, 1), input_data=coordinates_to_map)
+```
+
+Now let's **define the architecture** of our network. For now we will use the same architecture as the one we used for the perceptron network. Note that the neural network will be able to perform similar operation but it will use soft thresholds. This ensures us that our small network must theoretically be able to fit the data we use for training.
+
+```{r}
+set.seed(1)
+
+# specify the architecture: "+1" is always added to the number of inputs because we always add the same constant as an extra input so that one weight per neuron functions as the intercept (also called bias)
+N_dims_data <- 2
+N_inputs_to_L1 <- N_dims_data + 1
+N_neurons_in_L1 <- 2
+N_inputs_to_L2 <- N_neurons_in_L1 + 1
+N_neurons_in_L2 <- 2
+N_inputs_to_L3 <- N_neurons_in_L2 + 1
+N_neurons_in_L3 <- 1
+
+network_weights <- list(list(
+matrix(runif(N_neurons_in_L1*N_inputs_to_L1, min=-1, max=1), nrow = N_neurons_in_L1, ncol=N_inputs_to_L1), 
+matrix(runif(N_neurons_in_L2*N_inputs_to_L2, min=-1, max=1), nrow = N_neurons_in_L2, ncol=N_inputs_to_L2), 
+matrix(runif(N_neurons_in_L3*N_inputs_to_L3, min=-1, max=1), nrow = N_neurons_in_L3, ncol=N_inputs_to_L3)))
+```
+
+Once we have the training data and our weight matrices that define the architecture, we can finally **train the network**. The training can be very time-consuming and it might be a good idea to reduce the accuracy threshold (e.g. to 0.7) to do a quick test run.
+
+```{r echo = T, results = 'hide'}
+updated_weights <- training_function(training_data=t(coordinates_to_map), 
+                                training_data_labels=as.vector(labels_from_perceptron_network),                                 network_weights=network_weights, 
+                                learning_rate=0.01,
+                                test_data=t(coordinates_to_map),
+                                test_data_labels=as.vector(labels_from_perceptron_network),
+                                accuracy_threshold=0.7)
+```
+
+After training, you can use the optimized weights to make predictions for new data:
+
+```{r}
+# sample new data points 
+x1 <- c(-1,1)
+x2 <- c(-1,1)
+test_coordinates <- rand_select(dimension_intervals=list(x1, x2), number_of_samples=10000)
+# predict their class identity using the trained model
+output_after_training <- forward_pass_function(network_weights=updated_weights, data=t(test_coordinates))
+# visualize predictions for 
+data_for_visualization <- as.data.frame(test_coordinates)
+data_for_visualization$model_prediction <- as.vector(output_after_training$result)
+ggplot(data_for_visualization, aes(x=V1, y=V2, color=model_prediction)) +
+  geom_point(size=1)+xlim(-1, 1)+ylim(-1, 1)+coord_fixed()
+```
+
+## Exercises:
+
+1.  Repeat and speed up the training process of the example by initializing most weights at random, except the weights of the first layer. Select the weights of the first layer so that the first neurons perform the same classification as the first perceptrons in the perceptron network. Why does it take that long until the algorithm minimizes the loss function if we do not pre-select the initial weights?
+
+```{r}
+
+```
+
+2.  What happens if you adjust the learning rate?
+3.  Add more layers and/or nodes to the network and repeat training. Do you get faster convergence?
+
+```{r}
+
+```
+
+4.  Use the provided network architecture and train the model with 100, 200, 500 and 1000 data points. Test how the model labels coordinates outside of the range of the training data. How much more data are needed compared to the number of parameters to achieve generalization? Architecture: Layer1: 6 Neurons; Layer2: 6 Neurons; Layer3: 4 Neurons; Layer4: 1 Output Neuron.
+
+```{r}
+
+```
+
+5.  Let's assume that you get some data points for training from a real experiment. The two variables X1 and X2 that describe each of our data points could be two different features that you measure in an experiment (e.g. fluorescent signals from two reporters in a cell). Based on the signal of the two reporters you want to classify each cell. Most cells showed the same relation between the measured features and their class identity. However, a small fraction of cells showed a different relationship. As you don't want to bias your research by excluding them, you train a model on all cells. Let's study how a model can be affected by such choices. We assume the ground truth pattern in our data is the same as in the sections before but now we add a small cloud of points with labels that are in disagreement with the ground truth pattern. Train the model until the classification accuracy of the data you use for training reaches 0.85. Afterwards train the model again and stop at an accuracy of 0.98. What might be the better choice?
+
+```{r}
+
+```
+
+Feel free to play with any data set you want :) You can also change the model by implementing different activation and loss functions (e.g. activation function for the output neuron could be the sigmoid function combined with the cross-entropy loss function if you want to interpret the output as the probability for an event).

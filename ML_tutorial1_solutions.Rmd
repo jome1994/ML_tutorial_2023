@@ -1,0 +1,338 @@
+---
+title: "ML_tutorial1"
+author: "Jonas Metz"
+date: '2023-06-30'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# install required packages
+library(rlist)
+library(ggplot2)
+```
+
+## Definition of required functions
+
+```{r echo=FALSE}
+rand_select <- function(dimension_intervals=list(x1, x2), number_of_samples=10){
+  list_with_one_vector_per_dim <- lapply(dimension_intervals, FUN=function(interval){
+    runif(number_of_samples, min=interval[1], max=interval[2])
+  })
+  df_with_points <- do.call(cbind, list_with_one_vector_per_dim)
+  return(df_with_points)
+}
+```
+
+```{r echo=FALSE}
+apply_perceptron_network <- function(weights1=NULL, weights2=NULL, weights3=NULL, weights4=NULL, weights5=NULL, input_data=NULL){
+  input_data_ext <- cbind(rep(1, nrow(input_data)), input_data)
+  # run perceptrons of input layer
+  output1 <- sign((input_data_ext %*% weights1))
+  output2 <- sign((input_data_ext %*% weights2))
+  input_for_hidden_layer <- as.matrix(cbind(rep(1, nrow(input_data)), output1, output2))
+  # run perceptrons of hidden (intermediate) layer
+  output3 <- sign((input_for_hidden_layer %*% weights3))
+  output4 <- sign((input_for_hidden_layer %*% weights4))
+  input_for_final_perceptron <- as.matrix(cbind(rep(1, nrow(input_data)), output3, output4))
+  # run output perceptron
+  output5 <- sign((input_for_final_perceptron %*% weights5))
+  return(output5)
+}
+```
+
+```{r echo=FALSE}
+forward_pass_function <- function(network_weights=NULL, data=NULL){
+  optimized_weights <- network_weights[[length(network_weights)]]
+  # to use weights in first column as biases, a constant is added to data vector at position       one
+  # this needs to be repeated for every layer
+  input_l1 <- rbind(rep(1, ncol(data)), data)
+  # initialize lists for storing inputs and outputs
+  inputs <- list(input_l1)
+  outputs <- list()
+  # run first layer and all hidden layers in loop
+  for (index in c(1:(length(optimized_weights)-1))){
+    outputs[[index]] <- tanh(optimized_weights[[index]] %*% inputs[[index]])
+    inputs[[index+1]] <- rbind(rep(1, ncol(outputs[[index]])), outputs[[index]])
+  }
+  # run output layer; as our goal is to classify data, we just take the sign of the output
+  outputs[[length(optimized_weights)]] <- tanh(optimized_weights[[length(optimized_weights)]] %*% inputs[[length(optimized_weights)]])
+  # return final results plus all intermediate in- and outputs
+  return(list(result=outputs[[length(optimized_weights)]],
+              inputs=inputs,
+              outputs=outputs))
+}
+```
+
+```{r echo=FALSE}
+backpropagation_function <- function(in_out_values=results, weights=network_weights, labels=matrix(c(1))){
+  weights_last_iter <- weights[[length(weights)]]
+  # initialize list to be filled with deltas
+  delta_list <- rep(list(NA), length(weights_last_iter))
+  # compute deltas of output layer; this formula is derived from the squared error function
+  out_layer <- length(delta_list)
+  outs <- in_out_values$outputs[[out_layer]]
+  delta_list[[out_layer]] <- (1-outs^2)*2*(outs-labels)
+  # compute deltas of all other layers; only depend on upstream deltas and are independent of    error function
+  for (layer in c((out_layer-1):1)){
+    outs <- in_out_values$outputs[[layer]]
+    weights_prev <- weights_last_iter[[layer+1]]
+    deltas_prev <- delta_list[[layer+1]]
+    # In the formula below, the weights corresponding to the biases of the previous layer are      removed because they are not connected to a neuron of the current layer and hence
+    # not part of the partial derivatives of the error with respect to other weights
+    delta_list[[layer]] <- (1-outs^2)*(t(weights_prev)[c(2:ncol(weights_prev)),,drop=FALSE] %*% deltas_prev)
+  }
+  return(delta_list)
+}
+```
+
+```{r echo=FALSE}
+training_function <- function(training_data=matrix(c(NA, NA)), 
+                              training_data_labels=c(NA), 
+                              network_weights=NULL, 
+                              learning_rate=0.01,
+                              test_data=matrix(c(NA, NA)),
+                              test_data_labels=c(NA),
+                              accuracy_threshold=0.95){
+  accuracy_test <- 0
+  while (accuracy_test < accuracy_threshold){
+    # bring training data into random order (this is repeated if all training data have been       used once but the desired model performance has not been reached)
+    order <- sample(c(1:ncol(training_data)), size = ncol(training_data), replace = FALSE)
+    training_data <- training_data[, order]
+    training_data_labels <- training_data_labels[order]
+    # use one data point after another for training the model
+    data_index <- 1
+    while ((accuracy_test < accuracy_threshold) & (data_index <= ncol(training_data))){
+      # apply gradient descent to optimize network weights
+      # 1. forward pass: for one input data point compute all network values
+      results <- forward_pass_function(network_weights=network_weights, data=training_data[, data_index, drop=FALSE])
+      # 2. compute partial derivatives of loss (error) function for all weights using                backpropagation
+      deltas <- backpropagation_function(in_out_values=results, weights=network_weights, labels=matrix(training_data_labels[data_index]))
+      # 3. update weights in list
+      network_weights[[1]] <- lapply(c(1:length(network_weights[[1]])), FUN=function(layer){
+        new_weights <- network_weights[[1]][[layer]] - (learning_rate * (deltas[[layer]] %*% t(results$inputs[[layer]])))
+        return(new_weights)
+      })
+      # 4. test how well model performs on data that were not used for training
+      results_test <- sign(forward_pass_function(network_weights=network_weights, data=test_data)[[1]])
+      accuracy_test <- length(which(results_test == test_data_labels)) / ncol(test_data)
+      print(accuracy_test)
+      # update index
+      data_index <- data_index + 1
+    }
+  }
+  return(network_weights)
+}
+```
+
+## Solutions:
+
+1.  Repeat and speed up the training process of the example by initializing most weights at random, except the weights of the first layer. Select the weights of the first layer so that the first neurons perform the same classification as the first perceptrons in the perceptron network. Why does it take that long until the algorithm minimizes the loss function if we do not pre-select the initial weights?
+
+    Answer: In order to get a sharp classification boundary, some weights must have very large values. For large values however, the tanh function gets a slope close to 0. Therefore the algorithm makes only very small step into the direction of larger weights.
+
+```{r}
+# define architecture
+set.seed(1)
+
+# specify the architecture: "+1" is always added to the number of inputs because we always add the same constant as an extra input so that one weight per neuron functions as the intercept (also called bias)
+N_dims_data <- 2
+N_inputs_to_L1 <- N_dims_data + 1
+N_neurons_in_L1 <- 2
+N_inputs_to_L2 <- N_neurons_in_L1 + 1
+N_neurons_in_L2 <- 2
+N_inputs_to_L3 <- N_neurons_in_L2 + 1
+N_neurons_in_L3 <- 1
+
+network_weights <- list(list(
+matrix(runif(N_neurons_in_L1*N_inputs_to_L1, min=-1, max=1), nrow = N_neurons_in_L1, ncol=N_inputs_to_L1), 
+matrix(runif(N_neurons_in_L2*N_inputs_to_L2, min=-1, max=1), nrow = N_neurons_in_L2, ncol=N_inputs_to_L2), 
+matrix(runif(N_neurons_in_L3*N_inputs_to_L3, min=-1, max=1), nrow = N_neurons_in_L3, ncol=N_inputs_to_L3)))
+
+# manually overwrite some weights
+network_weights[[1]][[1]][1,] <- c(0.001,10,10)
+network_weights[[1]][[1]][2,] <- c(0.001,10,-10)
+
+# create training data
+set.seed(1)
+x1 <- c(-1,1)
+x2 <- c(-1,1)
+coordinates_to_map <- rand_select(dimension_intervals=list(x1, x2), number_of_samples=10000)
+labels_from_perceptron_network <- apply_perceptron_network(weights1=c(0,1,1), weights2=c(0,1,-1), weights3=c(-1.5, 1, 1), weights4=c(-1.5, -1, -1), weights5=c(1.5, 1, 1), input_data=coordinates_to_map)
+
+# train model
+updated_weights <- training_function(training_data=t(coordinates_to_map), 
+training_data_labels=as.vector(labels_from_perceptron_network),
+network_weights=network_weights, learning_rate=0.01, test_data=t(coordinates_to_map),
+test_data_labels=as.vector(labels_from_perceptron_network), accuracy_threshold=0.99)
+
+# visualize results
+output_after_training <- forward_pass_function(network_weights=updated_weights, data=t(coordinates_to_map))
+data_for_visualization <- as.data.frame(coordinates_to_map)
+data_for_visualization$model_prediction <- as.vector(output_after_training$result)
+ggplot(data_for_visualization, aes(x=V1, y=V2, color=model_prediction)) +
+  geom_point(size=0.001)+xlim(-1, 1)+ylim(-1, 1)+coord_fixed()
+
+
+```
+
+2.  What happens if you adjust the learning rate?
+
+    Answer: If the learning rate is small, the algorithm converges smoother. This comes with a higher risk of ending up in a local minimum and very slow optimization.
+
+3.  Add more layers and/or nodes to the network and repeat training. Do you get faster convergence?
+
+    Answer: Adding few more layer and increasing the number of nodes per layer seems to make it easier for the model to fit the data. However, much more layers and nodes seem to negatively affect the speed of the training algorithm.
+
+```{r}
+set.seed(1)
+
+# specify the architecture: "+1" is always added to the number of inputs because we always add the same constant as an extra input so that one weight per neuron functions as the intercept (also called bias)
+N_dims_data <- 2
+N_inputs_to_L1 <- N_dims_data + 1
+N_neurons_in_L1 <- 2
+N_inputs_to_L2 <- N_neurons_in_L1 + 1
+N_neurons_in_L2 <- 2
+N_inputs_to_L3 <- N_neurons_in_L2 + 1
+N_neurons_in_L3 <- 2
+N_inputs_to_L4 <- N_neurons_in_L3 + 1
+N_neurons_in_L4 <- 1
+
+network_weights <- list(list(
+matrix(runif(N_neurons_in_L1*N_inputs_to_L1, min=-1, max=1), nrow = N_neurons_in_L1, ncol=N_inputs_to_L1), 
+matrix(runif(N_neurons_in_L2*N_inputs_to_L2, min=-1, max=1), nrow = N_neurons_in_L2, ncol=N_inputs_to_L2), 
+matrix(runif(N_neurons_in_L3*N_inputs_to_L3, min=-1, max=1), nrow = N_neurons_in_L3, ncol=N_inputs_to_L3),
+matrix(runif(N_neurons_in_L4*N_inputs_to_L4, min=-1, max=1), nrow = N_neurons_in_L4, ncol=N_inputs_to_L4)))
+
+# create training data
+set.seed(1)
+x1 <- c(-1,1)
+x2 <- c(-1,1)
+coordinates_to_map <- rand_select(dimension_intervals=list(x1, x2), number_of_samples=10000)
+labels_from_perceptron_network <- apply_perceptron_network(weights1=c(0,1,1), weights2=c(0,1,-1), weights3=c(-1.5, 1, 1), weights4=c(-1.5, -1, -1), weights5=c(1.5, 1, 1), input_data=coordinates_to_map)
+
+# run the training function
+updated_weights <- training_function(training_data=t(coordinates_to_map), training_data_labels=as.vector(labels_from_perceptron_network), 
+network_weights=network_weights, learning_rate=0.01, test_data=t(coordinates_to_map),
+test_data_labels=as.vector(labels_from_perceptron_network), accuracy_threshold=0.9)
+```
+
+4.  Use the provided network architecture and train the model with 100, 200, 500 and 1000 data points. Test how the model labels coordinates outside of the range of the training data. How much more data are needed compared to the number of parameters to achieve generalization? Architecture: Layer1: 6 Neurons; Layer2: 6 Neurons; Layer3: 4 Neurons; Layer4: 1 Output Neuron.
+
+    Answer: The model has 93 weight parameters and as a rule of thumb it should be trained with at least 10 times that many data. Indeed, we observe that the model starts to generalize well outside of the range we used for training if we use 1000 data points.
+
+```{r}
+# define architecture
+set.seed(1)
+
+# specify the architecture: "+1" is always added to the number of inputs because we always add the same constant as an extra input so that one weight per neuron functions as the intercept (also called bias)
+N_dims_data <- 2
+N_inputs_to_L1 <- N_dims_data + 1
+N_neurons_in_L1 <- 6
+N_inputs_to_L2 <- N_neurons_in_L1 + 1
+N_neurons_in_L2 <- 6
+N_inputs_to_L3 <- N_neurons_in_L2 + 1
+N_neurons_in_L3 <- 4
+N_inputs_to_L4 <- N_neurons_in_L3 + 1
+N_neurons_in_L4 <- 1
+
+network_weights <- list(list(
+matrix(runif(N_neurons_in_L1*N_inputs_to_L1, min=-1, max=1), nrow = N_neurons_in_L1, ncol=N_inputs_to_L1), 
+matrix(runif(N_neurons_in_L2*N_inputs_to_L2, min=-1, max=1), nrow = N_neurons_in_L2, ncol=N_inputs_to_L2), 
+matrix(runif(N_neurons_in_L3*N_inputs_to_L3, min=-1, max=1), nrow = N_neurons_in_L3, ncol=N_inputs_to_L3),
+matrix(runif(N_neurons_in_L4*N_inputs_to_L4, min=-1, max=1), nrow = N_neurons_in_L4, ncol=N_inputs_to_L4)))
+
+# create training data
+set.seed(1)
+x1 <- c(-1,1)
+x2 <- c(-1,1)
+coordinates_to_map <- rand_select(dimension_intervals=list(x1, x2), number_of_samples=200)
+labels_from_perceptron_network <- apply_perceptron_network(weights1=c(0,1,1), weights2=c(0,1,-1), weights3=c(-1.5, 1, 1), weights4=c(-1.5, -1, -1), weights5=c(1.5, 1, 1), input_data=coordinates_to_map)
+
+
+updated_weights <- training_function(training_data=t(coordinates_to_map), training_data_labels=as.vector(labels_from_perceptron_network), 
+network_weights=network_weights, learning_rate=0.01, test_data=t(coordinates_to_map),
+test_data_labels=as.vector(labels_from_perceptron_network), accuracy_threshold=0.99)
+
+out_put_after_training <- forward_pass_function(network_weights=updated_weights, data=t(coordinates_to_map))
+data_for_visualization <- as.data.frame(coordinates_to_map)
+data_for_visualization$model_prediction <- as.vector(out_put_after_training$result)
+ggplot(data_for_visualization, aes(x=V1, y=V2, color=model_prediction)) +
+  geom_point(size=1)+xlim(-1, 1)+ylim(-1, 1)+coord_fixed()
+# how does the model behave outside of the data range that was used for training?
+set.seed(1)
+x1 <- c(-100,100)
+x2 <- c(-100,100)
+test_coordinates <- rand_select(dimension_intervals=list(x1, x2), number_of_samples=10000)
+out_put_after_training <- forward_pass_function(network_weights=updated_weights, data=t(test_coordinates))
+data_for_visualization <- as.data.frame(test_coordinates)
+data_for_visualization$model_prediction <- as.vector(out_put_after_training$result)
+ggplot(data_for_visualization, aes(x=V1, y=V2, color=model_prediction)) +
+  geom_point(size=1)+xlim(-100, 100)+ylim(-100, 100)+coord_fixed()
+```
+
+5.  Let's assume that you get some data points for training from a real experiment. The two variables X1 and X2 that describe each of our data points could be two different features that you measure in an experiment (e.g. fluorescent signals from two reporters in a cell). Based on the signal of the two reporters you want to classify each cell. Most cells showed the same relation between the measured features and their class identity. However, a small fraction of cells showed a different relationship. As you don't want to bias your research by excluding them, you train a model on all cells. Let's study how a model can be affected by such choices. We assume the ground truth pattern in our data is the same as in the sections before but now we add a small cloud of points with labels that are in disagreement with the ground truth pattern. Train the model until the classification accuracy of the data you use for training reaches 0.85. Afterwards train the model again and stop at an accuracy of 0.98. What might be the better choice?
+
+    Answer: In order to avoid fitting too many details of the data that might come from experimental artifacts, it might in some cases be an option to stop the optimization process earlier.
+
+```{r}
+# define architecture
+set.seed(1)
+
+# specify the architecture: "+1" is always added to the number of inputs because we always add the same constant as an extra input so that one weight per neuron functions as the intercept (also called bias)
+N_dims_data <- 2
+N_inputs_to_L1 <- N_dims_data + 1
+N_neurons_in_L1 <- 6
+N_inputs_to_L2 <- N_neurons_in_L1 + 1
+N_neurons_in_L2 <- 6
+N_inputs_to_L3 <- N_neurons_in_L2 + 1
+N_neurons_in_L3 <- 4
+N_inputs_to_L4 <- N_neurons_in_L3 + 1
+N_neurons_in_L4 <- 1
+
+network_weights <- list(list(
+matrix(runif(N_neurons_in_L1*N_inputs_to_L1, min=-1, max=1), nrow = N_neurons_in_L1, ncol=N_inputs_to_L1), 
+matrix(runif(N_neurons_in_L2*N_inputs_to_L2, min=-1, max=1), nrow = N_neurons_in_L2, ncol=N_inputs_to_L2), 
+matrix(runif(N_neurons_in_L3*N_inputs_to_L3, min=-1, max=1), nrow = N_neurons_in_L3, ncol=N_inputs_to_L3),
+matrix(runif(N_neurons_in_L4*N_inputs_to_L4, min=-1, max=1), nrow = N_neurons_in_L4, ncol=N_inputs_to_L4)))
+
+# generate training data that are in disagreement with ground truth
+set.seed(1)
+x1 <- c(-1,1)
+x2 <- c(-1,1)
+noise_coordinates <- rand_select(dimension_intervals=list(c(-0.5,0), c(0.5, 0.6)), number_of_samples=50)
+noise_labels <- rep(1, nrow(noise_coordinates))
+
+# generate normal training data
+coordinates_to_map <- rand_select(dimension_intervals=list(x1, x2), number_of_samples=500)
+labels_from_perceptron_network <- apply_perceptron_network(weights1=c(0,1,1), weights2=c(0,1,-1), weights3=c(-1.5, 1, 1), weights4=c(-1.5, -1, -1), weights5=c(1.5, 1, 1), input_data=coordinates_to_map)
+
+# merge the training data sets
+combined_coordinates <- rbind(coordinates_to_map, noise_coordinates)
+combined_labels <- c(as.vector(labels_from_perceptron_network), noise_labels)
+
+# train
+updated_weights <- training_function_new(training_data=t(combined_coordinates), training_data_labels=combined_labels, network_weights=network_weights, learning_rate=0.01, test_data=t(combined_coordinates),
+test_data_labels=combined_labels, accuracy_threshold=0.98)
+
+# visualize
+out_put_after_training <- forward_pass_function(network_weights=updated_weights, data=t(combined_coordinates))
+
+data_for_visualization <- as.data.frame(combined_coordinates)
+data_for_visualization$model_prediction <- as.vector(out_put_after_training$result)
+ggplot(data_for_visualization, aes(x=V1, y=V2, color=model_prediction)) +
+  geom_point(size=0.001)+xlim(-1, 1)+ylim(-1, 1)+coord_fixed()
+
+# how is it outside of training range?
+set.seed(1)
+x1 <- c(-1,1)
+x2 <- c(-1,1)
+test_coordinates <- rand_select(dimension_intervals=list(x1, x2), number_of_samples=10000)
+out_put_after_training <- forward_pass_function(network_weights=updated_weights, data=t(test_coordinates))
+data_for_visualization <- as.data.frame(test_coordinates)
+data_for_visualization$model_prediction <- as.vector(out_put_after_training$result)
+ggplot(data_for_visualization, aes(x=V1, y=V2, color=model_prediction)) +
+  geom_point(size=0.001)+xlim(-1, 1)+ylim(-1, 1)+coord_fixed()
+```
+
+Feel free to play with any data set you want :) You can also change the model by implementing different activation and loss functions (e.g. activation function for the output neuron could be the sigmoid function combined with the cross-entropy loss function if you want to interpret the output as the probability for an event).
